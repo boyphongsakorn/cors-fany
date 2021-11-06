@@ -1,10 +1,6 @@
----
 name: 'Build images To Docker Hub'
 
-on:
-  push:
-    branches:
-      - master
+on: push
 
 jobs:
   docker:

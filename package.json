@@ -1,0 +1,23 @@
+{
+  "name": "cors-fany",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/boyphongsakorn/cors-fany.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/boyphongsakorn/cors-fany/issues"
+  },
+  "homepage": "https://github.com/boyphongsakorn/cors-fany#readme",
+  "dependencies": {
+    "cors-anywhere": "^0.4.4"
+  }
+}
