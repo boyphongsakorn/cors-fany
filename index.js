@@ -9,8 +9,11 @@ var https = require('https');
 var url = require('url');
 var NodeCache = require('node-cache');
 
-// Cache with 24 hour TTL (86400 seconds)
-var cache = new NodeCache({ stdTTL: 86400, checkperiod: 3600 });
+// Cache TTL in seconds (24 hours)
+var CACHE_TTL = 86400;
+
+// Cache with 24 hour TTL
+var cache = new NodeCache({ stdTTL: CACHE_TTL, checkperiod: 3600 });
 
 // Create the CORS Anywhere proxy server (but don't listen yet)
 var corsServer = cors_proxy.createServer({
@@ -113,7 +116,7 @@ var server = http.createServer(function(req, res) {
                 var isSuccess = proxyRes.statusCode >= 200 && proxyRes.statusCode < 300;
                 if (isSuccess) {
                     headers['x-cache'] = 'MISS';
-                    headers['x-cache-ttl'] = '86400';
+                    headers['x-cache-ttl'] = String(CACHE_TTL);
                     
                     // Cache the response
                     cache.set(cacheKey, {
