@@ -20,6 +20,7 @@
   },
   "homepage": "https://github.com/boyphongsakorn/cors-fany#readme",
   "dependencies": {
-    "cors-anywhere": "^0.4.4"
+    "cors-anywhere": "^0.4.4",
+    "node-cache": "^5.1.2"
   }
 }
