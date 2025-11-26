@@ -10,7 +10,5 @@
         "src": "/(.*)",
         "dest": "index.js"
       }
-  ],
-  "cleanUrls": false,
-  "trailingSlash": false
+  ]
 }
