@@ -6,6 +6,7 @@ var port = process.env.PORT || 443;
 var cors_proxy = require('cors-anywhere');
 var http = require('http');
 var https = require('https');
+var url = require('url');
 var NodeCache = require('node-cache');
 
 // Cache with 24 hour TTL (86400 seconds)
@@ -21,7 +22,6 @@ var corsServer = cors_proxy.createServer({
 
 // Create a wrapper server to handle caching
 var server = http.createServer(function(req, res) {
-    var url = require('url');
     var parsedUrl = url.parse(req.url, true);
     var query = parsedUrl.query;
     
@@ -35,9 +35,19 @@ var server = http.createServer(function(req, res) {
     }
     
     // Remove cache parameter from URL for the actual request
-    var targetUrl = req.url.replace(/[?&]cache(&|$)/, function(match, suffix) {
-        return suffix ? '?' : '';
-    }).replace(/[?&]cache$/, '');
+    var targetUrl = req.url;
+    // Remove ?cache or &cache from URL
+    // Handle: ?cache, ?cache&other, &cache, &cache&other
+    targetUrl = targetUrl.replace(/([?&])cache(&|$)/g, function(match, prefix, suffix) {
+        if (prefix === '?' && suffix === '&') {
+            return '?'; // ?cache&other -> ?other
+        } else if (prefix === '?' && suffix === '') {
+            return ''; // ?cache -> (nothing)
+        } else if (prefix === '&') {
+            return suffix ? '&' : ''; // &cache&other -> &other, &cache -> (nothing)
+        }
+        return '';
+    });
     
     // Create a cache key from the URL and method
     var cacheKey = req.method + ':' + targetUrl;
@@ -70,16 +80,20 @@ var server = http.createServer(function(req, res) {
         
         var protocol = targetParsed.protocol === 'https:' ? https : http;
         
+        // Filter out sensitive and host-specific headers
+        var filteredHeaders = Object.assign({}, req.headers);
+        var headersToRemove = ['host', 'cookie', 'cookie2', 'authorization', 'proxy-authorization'];
+        headersToRemove.forEach(function(header) {
+            delete filteredHeaders[header];
+        });
+        
         var options = {
             hostname: targetParsed.hostname,
             port: targetParsed.port || (targetParsed.protocol === 'https:' ? 443 : 80),
             path: targetParsed.pathname + targetParsed.search,
             method: 'GET',
-            headers: Object.assign({}, req.headers)
+            headers: filteredHeaders
         };
-        
-        // Remove host header to avoid issues
-        delete options.headers.host;
         
         var proxyReq = protocol.request(options, function(proxyRes) {
             var body = [];
@@ -94,15 +108,20 @@ var server = http.createServer(function(req, res) {
                 // Prepare headers with CORS
                 var headers = Object.assign({}, proxyRes.headers);
                 headers['access-control-allow-origin'] = '*';
-                headers['x-cache'] = 'MISS';
-                headers['x-cache-ttl'] = '86400';
                 
-                // Cache the response
-                cache.set(cacheKey, {
-                    statusCode: proxyRes.statusCode,
-                    headers: headers,
-                    body: bodyBuffer
-                });
+                // Only cache successful responses (2xx status codes)
+                var isSuccess = proxyRes.statusCode >= 200 && proxyRes.statusCode < 300;
+                if (isSuccess) {
+                    headers['x-cache'] = 'MISS';
+                    headers['x-cache-ttl'] = '86400';
+                    
+                    // Cache the response
+                    cache.set(cacheKey, {
+                        statusCode: proxyRes.statusCode,
+                        headers: headers,
+                        body: bodyBuffer
+                    });
+                }
                 
                 // Send response
                 res.writeHead(proxyRes.statusCode, headers);
