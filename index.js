@@ -27,6 +27,13 @@ var corsServer = cors_proxy.createServer({
 var server = http.createServer(function(req, res) {
     var parsedUrl = url.parse(req.url, true);
     var query = parsedUrl.query;
+
+    console.log(req.url);
+        // if targetUrl don't have http, add https://
+    if (!/^\/http?:\/\//.test(req.url)) {
+        req.url = '/https://' + req.url.slice(1);
+    }
+    console.log(req.url);
     
     // Check if cache parameter is present (either ?cache or &cache)
     var shouldCache = 'cache' in query;
