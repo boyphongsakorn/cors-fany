@@ -30,8 +30,8 @@ var server = http.createServer(function(req, res) {
 
     console.log(req.url);
     // if targetUrl doesn't have http:// or https://, add https://
-    if (!/^\/https?:\/\//.test(req.url)) {
-        req.url = '/https://' + req.url.slice(1);
+    if (!/^\/http?:\/\//.test(req.url)) {
+        req.url = '/http://' + req.url.slice(1);
     }
     console.log(req.url);
     
