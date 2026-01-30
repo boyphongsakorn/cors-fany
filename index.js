@@ -91,6 +91,7 @@ var server = http.createServer(function(req, res) {
         // Function to make the request with a specific protocol
         var makeRequest = function(useProtocol, isRetry) {
             var protocol = useProtocol === 'https:' ? https : http;
+            var responseSent = false;
             
             // Filter out sensitive and host-specific headers
             var filteredHeaders = Object.assign({}, req.headers);
@@ -108,6 +109,7 @@ var server = http.createServer(function(req, res) {
             };
             
             var proxyReq = protocol.request(options, function(proxyRes) {
+                responseSent = true;
                 var body = [];
                 
                 proxyRes.on('data', function(chunk) {
@@ -142,20 +144,23 @@ var server = http.createServer(function(req, res) {
             });
             
             proxyReq.on('error', function(err) {
-                // If HTTPS failed and we haven't retried yet, try with HTTP
-                if (useProtocol === 'https:' && !isRetry && (err.code === 'EPROTO' || err.code === 'ERR_SSL_WRONG_VERSION_NUMBER')) {
-                    console.log('HTTPS failed, retrying with HTTP for: ' + pathWithoutSlash);
+                // If HTTPS failed and we haven't retried yet and response not started, try with HTTP
+                if (useProtocol === 'https:' && !isRetry && !responseSent && err.code === 'EPROTO') {
+                    console.log('HTTPS failed with EPROTO, retrying with HTTP for: ' + pathWithoutSlash);
+                    console.log('Warning: Falling back to insecure HTTP connection');
                     makeRequest('http:', true);
                 } else {
-                    res.writeHead(500, {'Access-Control-Allow-Origin': '*'});
-                    res.end('Proxy error: ' + err.message);
+                    if (!responseSent) {
+                        res.writeHead(500, {'Access-Control-Allow-Origin': '*'});
+                        res.end('Proxy error: ' + err.message);
+                    }
                 }
             });
             
             proxyReq.end();
         };
         
-        // Start with the original protocol from the URL
+        // Start with the protocol from the URL (defaults to HTTPS if none specified)
         makeRequest(targetParsed.protocol, false);
     } else {
         // For non-GET requests, pass through without caching
