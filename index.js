@@ -29,9 +29,9 @@ var server = http.createServer(function(req, res) {
     var query = parsedUrl.query;
 
     console.log(req.url);
-    // if targetUrl doesn't have http:// or https://, add http:// as default
+    // if targetUrl doesn't have http:// or https://, add https://
     if (!/^\/https?:\/\//.test(req.url)) {
-        req.url = '/http://' + req.url.slice(1);
+        req.url = '/https://' + req.url.slice(1);
     }
     console.log(req.url);
     
@@ -88,63 +88,75 @@ var server = http.createServer(function(req, res) {
             return;
         }
         
-        var protocol = targetParsed.protocol === 'https:' ? https : http;
-        
-        // Filter out sensitive and host-specific headers
-        var filteredHeaders = Object.assign({}, req.headers);
-        var headersToRemove = ['host', 'cookie', 'cookie2', 'authorization', 'proxy-authorization'];
-        headersToRemove.forEach(function(header) {
-            delete filteredHeaders[header];
-        });
-        
-        var options = {
-            hostname: targetParsed.hostname,
-            port: targetParsed.port || (targetParsed.protocol === 'https:' ? 443 : 80),
-            path: targetParsed.pathname + targetParsed.search,
-            method: 'GET',
-            headers: filteredHeaders
+        // Function to make the request with a specific protocol
+        var makeRequest = function(useProtocol, isRetry) {
+            var protocol = useProtocol === 'https:' ? https : http;
+            
+            // Filter out sensitive and host-specific headers
+            var filteredHeaders = Object.assign({}, req.headers);
+            var headersToRemove = ['host', 'cookie', 'cookie2', 'authorization', 'proxy-authorization'];
+            headersToRemove.forEach(function(header) {
+                delete filteredHeaders[header];
+            });
+            
+            var options = {
+                hostname: targetParsed.hostname,
+                port: targetParsed.port || (useProtocol === 'https:' ? 443 : 80),
+                path: targetParsed.pathname + targetParsed.search,
+                method: 'GET',
+                headers: filteredHeaders
+            };
+            
+            var proxyReq = protocol.request(options, function(proxyRes) {
+                var body = [];
+                
+                proxyRes.on('data', function(chunk) {
+                    body.push(chunk);
+                });
+                
+                proxyRes.on('end', function() {
+                    var bodyBuffer = Buffer.concat(body);
+                    
+                    // Prepare headers with CORS
+                    var headers = Object.assign({}, proxyRes.headers);
+                    headers['access-control-allow-origin'] = '*';
+                    
+                    // Only cache successful responses (2xx status codes)
+                    var isSuccess = proxyRes.statusCode >= 200 && proxyRes.statusCode < 300;
+                    if (isSuccess) {
+                        headers['x-cache'] = 'MISS';
+                        headers['x-cache-ttl'] = String(CACHE_TTL);
+                        
+                        // Cache the response
+                        cache.set(cacheKey, {
+                            statusCode: proxyRes.statusCode,
+                            headers: headers,
+                            body: bodyBuffer
+                        });
+                    }
+                    
+                    // Send response
+                    res.writeHead(proxyRes.statusCode, headers);
+                    res.end(bodyBuffer);
+                });
+            });
+            
+            proxyReq.on('error', function(err) {
+                // If HTTPS failed and we haven't retried yet, try with HTTP
+                if (useProtocol === 'https:' && !isRetry && (err.code === 'EPROTO' || err.code === 'ERR_SSL_WRONG_VERSION_NUMBER')) {
+                    console.log('HTTPS failed, retrying with HTTP for: ' + pathWithoutSlash);
+                    makeRequest('http:', true);
+                } else {
+                    res.writeHead(500, {'Access-Control-Allow-Origin': '*'});
+                    res.end('Proxy error: ' + err.message);
+                }
+            });
+            
+            proxyReq.end();
         };
         
-        var proxyReq = protocol.request(options, function(proxyRes) {
-            var body = [];
-            
-            proxyRes.on('data', function(chunk) {
-                body.push(chunk);
-            });
-            
-            proxyRes.on('end', function() {
-                var bodyBuffer = Buffer.concat(body);
-                
-                // Prepare headers with CORS
-                var headers = Object.assign({}, proxyRes.headers);
-                headers['access-control-allow-origin'] = '*';
-                
-                // Only cache successful responses (2xx status codes)
-                var isSuccess = proxyRes.statusCode >= 200 && proxyRes.statusCode < 300;
-                if (isSuccess) {
-                    headers['x-cache'] = 'MISS';
-                    headers['x-cache-ttl'] = String(CACHE_TTL);
-                    
-                    // Cache the response
-                    cache.set(cacheKey, {
-                        statusCode: proxyRes.statusCode,
-                        headers: headers,
-                        body: bodyBuffer
-                    });
-                }
-                
-                // Send response
-                res.writeHead(proxyRes.statusCode, headers);
-                res.end(bodyBuffer);
-            });
-        });
-        
-        proxyReq.on('error', function(err) {
-            res.writeHead(500, {'Access-Control-Allow-Origin': '*'});
-            res.end('Proxy error: ' + err.message);
-        });
-        
-        proxyReq.end();
+        // Start with the original protocol from the URL
+        makeRequest(targetParsed.protocol, false);
     } else {
         // For non-GET requests, pass through without caching
         req.url = targetUrl;
