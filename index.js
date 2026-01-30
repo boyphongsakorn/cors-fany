@@ -39,8 +39,49 @@ var server = http.createServer(function(req, res) {
     var shouldCache = 'cache' in query;
     
     if (!shouldCache) {
-        // No caching requested, pass through to cors proxy
-        corsServer.emit('request', req, res);
+        // No caching requested, pass through to cors proxy with HTTPS to HTTP fallback
+        var hasHttps = /^\/https:\/\//.test(req.url);
+        var responseSent = false;
+        
+        // Wrapper function to try HTTPS first, then HTTP on error
+        var tryRequest = function(useHttp) {
+            var currentUrl = req.url;
+            if (useHttp && hasHttps) {
+                // Convert HTTPS to HTTP for retry
+                req.url = req.url.replace(/^\/https:\/\//, '/http://');
+                console.log('Retrying with HTTP: ' + req.url);
+                console.log('Warning: Falling back to insecure HTTP connection');
+            }
+            
+            // Track if response headers have been sent
+            var originalWriteHead = res.writeHead;
+            var writeHeadCalled = false;
+            res.writeHead = function() {
+                writeHeadCalled = true;
+                responseSent = true;
+                return originalWriteHead.apply(res, arguments);
+            };
+            
+            // Listen for errors before response is sent
+            var errorHandler = function(err) {
+                if (!useHttp && hasHttps && !responseSent && err.code === 'EPROTO') {
+                    console.log('HTTPS failed with EPROTO, retrying with HTTP');
+                    // Restore original URL for retry
+                    req.url = currentUrl;
+                    // Restore writeHead
+                    res.writeHead = originalWriteHead;
+                    // Remove this error listener
+                    res.removeListener('error', errorHandler);
+                    // Retry with HTTP
+                    tryRequest(true);
+                }
+            };
+            
+            res.once('error', errorHandler);
+            corsServer.emit('request', req, res);
+        };
+        
+        tryRequest(false);
         return;
     }
     
@@ -88,80 +129,63 @@ var server = http.createServer(function(req, res) {
             return;
         }
         
-        // Function to make the request with a specific protocol
-        var makeRequest = function(useProtocol, isRetry) {
-            var protocol = useProtocol === 'https:' ? https : http;
-            var responseSent = false;
-            
-            // Filter out sensitive and host-specific headers
-            var filteredHeaders = Object.assign({}, req.headers);
-            var headersToRemove = ['host', 'cookie', 'cookie2', 'authorization', 'proxy-authorization'];
-            headersToRemove.forEach(function(header) {
-                delete filteredHeaders[header];
-            });
-            
-            var options = {
-                hostname: targetParsed.hostname,
-                port: targetParsed.port || (useProtocol === 'https:' ? 443 : 80),
-                path: targetParsed.pathname + targetParsed.search,
-                method: 'GET',
-                headers: filteredHeaders
-            };
-            
-            var proxyReq = protocol.request(options, function(proxyRes) {
-                responseSent = true;
-                var body = [];
-                
-                proxyRes.on('data', function(chunk) {
-                    body.push(chunk);
-                });
-                
-                proxyRes.on('end', function() {
-                    var bodyBuffer = Buffer.concat(body);
-                    
-                    // Prepare headers with CORS
-                    var headers = Object.assign({}, proxyRes.headers);
-                    headers['access-control-allow-origin'] = '*';
-                    
-                    // Only cache successful responses (2xx status codes)
-                    var isSuccess = proxyRes.statusCode >= 200 && proxyRes.statusCode < 300;
-                    if (isSuccess) {
-                        headers['x-cache'] = 'MISS';
-                        headers['x-cache-ttl'] = String(CACHE_TTL);
-                        
-                        // Cache the response
-                        cache.set(cacheKey, {
-                            statusCode: proxyRes.statusCode,
-                            headers: headers,
-                            body: bodyBuffer
-                        });
-                    }
-                    
-                    // Send response
-                    res.writeHead(proxyRes.statusCode, headers);
-                    res.end(bodyBuffer);
-                });
-            });
-            
-            proxyReq.on('error', function(err) {
-                // If HTTPS failed and we haven't retried yet and response not started, try with HTTP
-                if (useProtocol === 'https:' && !isRetry && !responseSent && err.code === 'EPROTO') {
-                    console.log('HTTPS failed with EPROTO, retrying with HTTP for: ' + pathWithoutSlash);
-                    console.log('Warning: Falling back to insecure HTTP connection');
-                    makeRequest('http:', true);
-                } else {
-                    if (!responseSent) {
-                        res.writeHead(500, {'Access-Control-Allow-Origin': '*'});
-                        res.end('Proxy error: ' + err.message);
-                    }
-                }
-            });
-            
-            proxyReq.end();
+        var protocol = targetParsed.protocol === 'https:' ? https : http;
+        
+        // Filter out sensitive and host-specific headers
+        var filteredHeaders = Object.assign({}, req.headers);
+        var headersToRemove = ['host', 'cookie', 'cookie2', 'authorization', 'proxy-authorization'];
+        headersToRemove.forEach(function(header) {
+            delete filteredHeaders[header];
+        });
+        
+        var options = {
+            hostname: targetParsed.hostname,
+            port: targetParsed.port || (targetParsed.protocol === 'https:' ? 443 : 80),
+            path: targetParsed.pathname + targetParsed.search,
+            method: 'GET',
+            headers: filteredHeaders
         };
         
-        // Start with the protocol from the URL (defaults to HTTPS if none specified)
-        makeRequest(targetParsed.protocol || 'https:', false);
+        var proxyReq = protocol.request(options, function(proxyRes) {
+            var body = [];
+            
+            proxyRes.on('data', function(chunk) {
+                body.push(chunk);
+            });
+            
+            proxyRes.on('end', function() {
+                var bodyBuffer = Buffer.concat(body);
+                
+                // Prepare headers with CORS
+                var headers = Object.assign({}, proxyRes.headers);
+                headers['access-control-allow-origin'] = '*';
+                
+                // Only cache successful responses (2xx status codes)
+                var isSuccess = proxyRes.statusCode >= 200 && proxyRes.statusCode < 300;
+                if (isSuccess) {
+                    headers['x-cache'] = 'MISS';
+                    headers['x-cache-ttl'] = String(CACHE_TTL);
+                    
+                    // Cache the response
+                    cache.set(cacheKey, {
+                        statusCode: proxyRes.statusCode,
+                        headers: headers,
+                        body: bodyBuffer
+                    });
+                }
+                
+                // Send response
+                res.writeHead(proxyRes.statusCode, headers);
+                res.end(bodyBuffer);
+            });
+        });
+        
+        proxyReq.on('error', function(err) {
+            res.writeHead(500, {'Access-Control-Allow-Origin': '*'});
+            res.end('Proxy error: ' + err.message);
+        });
+        
+        proxyReq.end();
     } else {
         // For non-GET requests, pass through without caching
         req.url = targetUrl;
