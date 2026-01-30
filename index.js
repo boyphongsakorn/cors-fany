@@ -29,7 +29,7 @@ var server = http.createServer(function(req, res) {
     var query = parsedUrl.query;
 
     console.log(req.url);
-        // if targetUrl doesn't have http:// or https://, add https://
+    // if targetUrl doesn't have http:// or https://, add https://
     if (!/^\/https?:\/\//.test(req.url)) {
         req.url = '/https://' + req.url.slice(1);
     }
@@ -39,8 +39,47 @@ var server = http.createServer(function(req, res) {
     var shouldCache = 'cache' in query;
     
     if (!shouldCache) {
-        // No caching requested, pass through to cors proxy
-        corsServer.emit('request', req, res);
+        // No caching requested, pass through to cors proxy with HTTPS to HTTP fallback
+        var hasHttps = /^\/https:\/\//.test(req.url);
+        var responseSent = false;
+        var originalWriteHead = res.writeHead;
+        
+        // Wrapper function to try HTTPS first, then HTTP on error
+        var tryRequest = function(useHttp) {
+            var currentUrl = req.url;
+            if (useHttp && hasHttps) {
+                // Convert HTTPS to HTTP for retry
+                req.url = req.url.replace(/^\/https:\/\//, '/http://');
+                console.log('Retrying with HTTP: ' + req.url);
+                console.log('Warning: Falling back to insecure HTTP connection');
+            }
+            
+            // Track if response headers have been sent
+            res.writeHead = function() {
+                responseSent = true;
+                return originalWriteHead.apply(res, arguments);
+            };
+            
+            // Listen for errors before response is sent
+            var errorHandler = function(err) {
+                if (!useHttp && hasHttps && !responseSent && err.code === 'EPROTO') {
+                    console.log('HTTPS failed with EPROTO, retrying with HTTP');
+                    // Restore original URL for retry
+                    req.url = currentUrl;
+                    // Restore writeHead
+                    res.writeHead = originalWriteHead;
+                    // Remove this error listener
+                    res.removeListener('error', errorHandler);
+                    // Retry with HTTP
+                    tryRequest(true);
+                }
+            };
+            
+            res.once('error', errorHandler);
+            corsServer.emit('request', req, res);
+        };
+        
+        tryRequest(false);
         return;
     }
     
@@ -100,7 +139,7 @@ var server = http.createServer(function(req, res) {
         var options = {
             hostname: targetParsed.hostname,
             port: targetParsed.port || (targetParsed.protocol === 'https:' ? 443 : 80),
-            path: targetParsed.pathname + targetParsed.search,
+            path: targetParsed.pathname + (targetParsed.search || ''),
             method: 'GET',
             headers: filteredHeaders
         };
