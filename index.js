@@ -42,6 +42,7 @@ var server = http.createServer(function(req, res) {
         // No caching requested, pass through to cors proxy with HTTPS to HTTP fallback
         var hasHttps = /^\/https:\/\//.test(req.url);
         var responseSent = false;
+        var originalWriteHead = res.writeHead;
         
         // Wrapper function to try HTTPS first, then HTTP on error
         var tryRequest = function(useHttp) {
@@ -54,10 +55,7 @@ var server = http.createServer(function(req, res) {
             }
             
             // Track if response headers have been sent
-            var originalWriteHead = res.writeHead;
-            var writeHeadCalled = false;
             res.writeHead = function() {
-                writeHeadCalled = true;
                 responseSent = true;
                 return originalWriteHead.apply(res, arguments);
             };
@@ -141,7 +139,7 @@ var server = http.createServer(function(req, res) {
         var options = {
             hostname: targetParsed.hostname,
             port: targetParsed.port || (targetParsed.protocol === 'https:' ? 443 : 80),
-            path: targetParsed.pathname + targetParsed.search,
+            path: targetParsed.pathname + (targetParsed.search || ''),
             method: 'GET',
             headers: filteredHeaders
         };
