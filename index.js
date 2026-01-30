@@ -161,7 +161,7 @@ var server = http.createServer(function(req, res) {
         };
         
         // Start with the protocol from the URL (defaults to HTTPS if none specified)
-        makeRequest(targetParsed.protocol, false);
+        makeRequest(targetParsed.protocol || 'https:', false);
     } else {
         // For non-GET requests, pass through without caching
         req.url = targetUrl;
