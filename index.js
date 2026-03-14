@@ -23,172 +23,244 @@ var corsServer = cors_proxy.createServer({
     setHeaders: {'Access-Control-Allow-Headers': 'api-token'}
 });
 
-// Create a wrapper server to handle caching
+var BLOCKED_CONTENT_TYPES = new Set([
+    // images
+    'image/webp',
+    'image/jpeg',
+    'image/jpg',
+    'image/png',
+    'image/gif',
+    'image/svg+xml',
+    'image/avif',
+    'image/bmp',
+    'image/tiff',
+    'image/x-icon',
+    'image/vnd.microsoft.icon',
+    // video
+    'video/mp4',
+    'video/webm',
+    'video/ogg',
+    'video/mpeg',
+    'video/quicktime',
+    'video/x-msvideo',
+    'video/x-ms-wmv',
+    'video/3gpp',
+    'video/3gpp2',
+    'video/x-flv',
+    // audio
+    'audio/mpeg',
+    'audio/ogg',
+    'audio/wav',
+    'audio/webm',
+    'audio/aac',
+    'audio/flac',
+    'audio/x-ms-wma',
+    // generic binary
+    'application/octet-stream',
+]);
+
+function isBlockedType(contentTypeHeader) {
+    if (!contentTypeHeader) return false;
+    var mime = contentTypeHeader.split(';')[0].trim().toLowerCase();
+    return BLOCKED_CONTENT_TYPES.has(mime) ||
+           mime.startsWith('video/') ||
+           mime.startsWith('audio/') ||
+           mime.startsWith('image/');
+}
+
 var server = http.createServer(function(req, res) {
     var parsedUrl = url.parse(req.url, true);
     var query = parsedUrl.query;
 
     console.log(req.url);
-    // if targetUrl doesn't have http:// or https://, add https://
     if (!/^\/https?:\/\//.test(req.url)) {
         req.url = '/https://' + req.url.slice(1);
     }
     console.log(req.url);
-    
-    // Check if cache parameter is present (either ?cache or &cache)
+
     var shouldCache = 'cache' in query;
-    
-    if (!shouldCache) {
-        // No caching requested, pass through to cors proxy with HTTPS to HTTP fallback
-        var hasHttps = /^\/https:\/\//.test(req.url);
-        var responseSent = false;
-        var originalWriteHead = res.writeHead;
-        
-        // Wrapper function to try HTTPS first, then HTTP on error
-        var tryRequest = function(useHttp) {
-            var currentUrl = req.url;
-            if (useHttp && hasHttps) {
-                // Convert HTTPS to HTTP for retry
-                req.url = req.url.replace(/^\/https:\/\//, '/http://');
-                console.log('Retrying with HTTP: ' + req.url);
-                console.log('Warning: Falling back to insecure HTTP connection');
-            }
-            
-            // Track if response headers have been sent
-            res.writeHead = function() {
-                responseSent = true;
-                return originalWriteHead.apply(res, arguments);
-            };
-            
-            // Listen for errors before response is sent
-            var errorHandler = function(err) {
-                if (!useHttp && hasHttps && !responseSent && err.code === 'EPROTO') {
-                    console.log('HTTPS failed with EPROTO, retrying with HTTP');
-                    // Restore original URL for retry
-                    req.url = currentUrl;
-                    // Restore writeHead
-                    res.writeHead = originalWriteHead;
-                    // Remove this error listener
-                    res.removeListener('error', errorHandler);
-                    // Retry with HTTP
-                    tryRequest(true);
-                }
-            };
-            
-            res.once('error', errorHandler);
-            corsServer.emit('request', req, res);
+
+    // ── Helper: build filtered headers ──────────────────────────────────────
+    function buildHeaders(reqHeaders) {
+        var h = Object.assign({}, reqHeaders);
+        ['host', 'cookie', 'cookie2', 'authorization', 'proxy-authorization'].forEach(function(k) {
+            delete h[k];
+        });
+        return h;
+    }
+
+    // ── Helper: proxy a URL, follow redirects internally, block media ────────
+    function proxyFetch(targetUrl, redirectCount, onSuccess) {
+        redirectCount = redirectCount || 0;
+
+        if (redirectCount > 5) {
+            res.writeHead(508, { 'Access-Control-Allow-Origin': '*' });
+            res.end('Too many redirects');
+            return;
+        }
+
+        var targetParsed;
+        try {
+            targetParsed = new URL(targetUrl);
+        } catch (e) {
+            res.writeHead(400, { 'Access-Control-Allow-Origin': '*' });
+            res.end('Invalid URL: ' + targetUrl);
+            return;
+        }
+
+        var useHttps = targetParsed.protocol === 'https:';
+        var protocol = useHttps ? https : http;
+
+        var options = {
+            hostname: targetParsed.hostname,
+            port: targetParsed.port || (useHttps ? 443 : 80),
+            path: targetParsed.pathname + (targetParsed.search || ''),
+            method: req.method,
+            headers: buildHeaders(req.headers)
         };
-        
-        tryRequest(false);
+
+        var proxyReq = protocol.request(options, function(proxyRes) {
+            var statusCode = proxyRes.statusCode;
+
+            // ── Follow redirects internally ──────────────────────────────
+            if (statusCode === 301 || statusCode === 302 || statusCode === 303 ||
+                statusCode === 307 || statusCode === 308) {
+                var location = proxyRes.headers['location'];
+                proxyRes.resume();
+
+                if (!location) {
+                    res.writeHead(502, { 'Access-Control-Allow-Origin': '*' });
+                    res.end('Redirect with no location header');
+                    return;
+                }
+
+                // Resolve relative redirects
+                try {
+                    location = new URL(location, targetParsed.origin).href;
+                } catch (e) {
+                    res.writeHead(502, { 'Access-Control-Allow-Origin': '*' });
+                    res.end('Invalid redirect location: ' + location);
+                    return;
+                }
+
+                console.log('Following redirect (' + redirectCount + ') to: ' + location);
+                proxyFetch(location, redirectCount + 1, onSuccess);
+                return;
+            }
+
+            // ── Block media types ────────────────────────────────────────
+            var contentType = proxyRes.headers['content-type'] || '';
+            if (isBlockedType(contentType)) {
+                proxyRes.resume();
+                res.writeHead(403, {
+                    'Access-Control-Allow-Origin': '*',
+                    'x-blocked-type': contentType.split(';')[0].trim()
+                });
+                res.end('Blocked: media type not allowed (' + contentType.split(';')[0].trim() + ')');
+                return;
+            }
+
+            // ── Allowed — hand off to caller ─────────────────────────────
+            onSuccess(proxyRes, contentType);
+        });
+
+        proxyReq.on('error', function(err) {
+            // HTTPS → HTTP fallback
+            if (useHttps && err.code === 'EPROTO') {
+                console.log('HTTPS failed with EPROTO, retrying with HTTP: ' + targetUrl);
+                var httpUrl = targetUrl.replace(/^https:\/\//, 'http://');
+                proxyFetch(httpUrl, redirectCount, onSuccess);
+                return;
+            }
+            if (!res.headersSent) {
+                res.writeHead(500, { 'Access-Control-Allow-Origin': '*' });
+            }
+            res.end('Proxy error: ' + err.message);
+        });
+
+        if (req.method !== 'GET' && req.method !== 'HEAD') {
+            req.pipe(proxyReq);
+        } else {
+            proxyReq.end();
+        }
+    }
+
+    // ── Non-cached path ──────────────────────────────────────────────────────
+    if (!shouldCache) {
+        var rawUrl = req.url.slice(1); // strip leading /
+        proxyFetch(rawUrl, 0, function(proxyRes) {
+            var headers = Object.assign({}, proxyRes.headers);
+            headers['access-control-allow-origin'] = '*';
+            res.writeHead(proxyRes.statusCode, headers);
+            proxyRes.pipe(res);
+        });
         return;
     }
-    
-    // Remove cache parameter from URL for the actual request
+
+    // ── Cached path ──────────────────────────────────────────────────────────
+
+    // Strip ?cache / &cache from URL for actual request + cache key
     var targetUrl = req.url;
-    // Remove ?cache or &cache from URL
-    // Handle: ?cache, ?cache&other, &cache, &cache&other
     targetUrl = targetUrl.replace(/([?&])cache(&|$)/g, function(match, prefix, suffix) {
-        if (prefix === '?' && suffix === '&') {
-            return '?'; // ?cache&other -> ?other
-        } else if (prefix === '?' && suffix === '') {
-            return ''; // ?cache -> (nothing)
-        } else if (prefix === '&') {
-            return suffix ? '&' : ''; // &cache&other -> &other, &cache -> (nothing)
-        }
+        if (prefix === '?' && suffix === '&') return '?';
+        if (prefix === '?' && suffix === '') return '';
+        if (prefix === '&') return suffix ? '&' : '';
         return '';
     });
-    
-    // Create a cache key from the URL and method
+
     var cacheKey = req.method + ':' + targetUrl;
-    
-    // Check if we have a cached response
+
+    // Return cached response if available
     var cachedResponse = cache.get(cacheKey);
     if (cachedResponse) {
-        // Return cached response with HIT header
         var cachedHeaders = Object.assign({}, cachedResponse.headers);
         cachedHeaders['x-cache'] = 'HIT';
         res.writeHead(cachedResponse.statusCode, cachedHeaders);
         res.end(cachedResponse.body);
         return;
     }
-    
-    // For GET requests, fetch and cache the response
-    if (req.method === 'GET') {
-        // Extract the target URL from the path (cors-anywhere format: /http://example.com/path)
-        var pathWithoutSlash = targetUrl.slice(1); // Remove leading /
-        
-        var targetParsed;
-        try {
-            targetParsed = new URL(pathWithoutSlash);
-        } catch (e) {
-            // Invalid URL, pass through to cors proxy
-            req.url = targetUrl;
-            corsServer.emit('request', req, res);
-            return;
-        }
-        
-        var protocol = targetParsed.protocol === 'https:' ? https : http;
-        
-        // Filter out sensitive and host-specific headers
-        var filteredHeaders = Object.assign({}, req.headers);
-        var headersToRemove = ['host', 'cookie', 'cookie2', 'authorization', 'proxy-authorization'];
-        headersToRemove.forEach(function(header) {
-            delete filteredHeaders[header];
+
+    // Only cache GET requests
+    if (req.method !== 'GET') {
+        var rawTargetUrl = targetUrl.slice(1);
+        proxyFetch(rawTargetUrl, 0, function(proxyRes) {
+            var headers = Object.assign({}, proxyRes.headers);
+            headers['access-control-allow-origin'] = '*';
+            res.writeHead(proxyRes.statusCode, headers);
+            proxyRes.pipe(res);
         });
-        
-        var options = {
-            hostname: targetParsed.hostname,
-            port: targetParsed.port || (targetParsed.protocol === 'https:' ? 443 : 80),
-            path: targetParsed.pathname + (targetParsed.search || ''),
-            method: 'GET',
-            headers: filteredHeaders
-        };
-        
-        var proxyReq = protocol.request(options, function(proxyRes) {
-            var body = [];
-            
-            proxyRes.on('data', function(chunk) {
-                body.push(chunk);
-            });
-            
-            proxyRes.on('end', function() {
-                var bodyBuffer = Buffer.concat(body);
-                
-                // Prepare headers with CORS
-                var headers = Object.assign({}, proxyRes.headers);
-                headers['access-control-allow-origin'] = '*';
-                
-                // Only cache successful responses (2xx status codes)
-                var isSuccess = proxyRes.statusCode >= 200 && proxyRes.statusCode < 300;
-                if (isSuccess) {
-                    headers['x-cache'] = 'MISS';
-                    headers['x-cache-ttl'] = String(CACHE_TTL);
-                    
-                    // Cache the response
-                    cache.set(cacheKey, {
-                        statusCode: proxyRes.statusCode,
-                        headers: headers,
-                        body: bodyBuffer
-                    });
-                }
-                
-                // Send response
-                res.writeHead(proxyRes.statusCode, headers);
-                res.end(bodyBuffer);
-            });
-        });
-        
-        proxyReq.on('error', function(err) {
-            res.writeHead(500, {'Access-Control-Allow-Origin': '*'});
-            res.end('Proxy error: ' + err.message);
-        });
-        
-        proxyReq.end();
-    } else {
-        // For non-GET requests, pass through without caching
-        req.url = targetUrl;
-        corsServer.emit('request', req, res);
+        return;
     }
+
+    // GET + cache: buffer the response so we can store it
+    var rawTargetUrl = targetUrl.slice(1);
+    proxyFetch(rawTargetUrl, 0, function(proxyRes) {
+        var body = [];
+
+        proxyRes.on('data', function(chunk) {
+            body.push(chunk);
+        });
+
+        proxyRes.on('end', function() {
+            var bodyBuffer = Buffer.concat(body);
+            var headers = Object.assign({}, proxyRes.headers);
+            headers['access-control-allow-origin'] = '*';
+
+            var isSuccess = proxyRes.statusCode >= 200 && proxyRes.statusCode < 300;
+            if (isSuccess) {
+                headers['x-cache'] = 'MISS';
+                headers['x-cache-ttl'] = String(CACHE_TTL);
+                cache.set(cacheKey, {
+                    statusCode: proxyRes.statusCode,
+                    headers: headers,
+                    body: bodyBuffer
+                });
+            }
+
+            res.writeHead(proxyRes.statusCode, headers);
+            res.end(bodyBuffer);
+        });
+    });
 });
 
 server.listen(port, host, function() {
