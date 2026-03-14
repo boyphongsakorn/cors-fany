@@ -57,6 +57,41 @@ var BLOCKED_CONTENT_TYPES = new Set([
     'audio/x-ms-wma',
     // generic binary
     'application/octet-stream',
+
+    // ── HLS (m3u8) ──────────────────────────────────────────────────────────
+    'application/vnd.apple.mpegurl',        // standard m3u8
+    'application/x-mpegurl',                // common alternative
+    'audio/mpegurl',                        // audio-only HLS
+    'audio/x-mpegurl',                      // audio-only HLS alternative
+
+    // ── MPEG-DASH ────────────────────────────────────────────────────────────
+    'application/dash+xml',                 // .mpd manifest
+    'video/vnd.mpeg.dash.mpd',             // alternative DASH mime
+
+    // ── Smooth Streaming (Microsoft) ────────────────────────────────────────
+    'application/vnd.ms-sstr+xml',
+
+    // ── RTSP / RTP / raw transport streams ──────────────────────────────────
+    'video/mp2t',                           // .ts MPEG-2 transport stream segments
+    'video/mp2p',                           // MPEG-2 program stream
+    'video/mpeg2',
+    'application/mp4',                      // fragmented mp4 segments (fMP4)
+    'video/iso.segment',                    // fMP4 segment alternative
+
+    // ── Shoutcast / Icecast audio streams ───────────────────────────────────
+    'audio/aacp',                           // AAC+ stream
+    'audio/x-scpls',                        // .pls playlist
+    'application/pls+xml',
+    'audio/x-mpegurl',                      // .m3u playlist (already above, safe duplicate)
+
+    // ── Media playlists / containers ────────────────────────────────────────
+    'application/x-mpegurl',               // .m3u
+    'application/vnd.rn-realmedia',        // RealMedia .rm
+    'application/vnd.rn-realmedia-vbr',    // RealMedia variable bitrate
+    'video/x-ms-asf',                      // ASF / WMV container
+    'video/x-ms-wmx',                      // Windows Media redirector
+    'video/x-ms-wvx',                      // Windows Media video playlist
+    'audio/x-ms-wax',                      // Windows Media audio playlist
 ]);
 
 function isBlockedType(contentTypeHeader) {
@@ -65,7 +100,13 @@ function isBlockedType(contentTypeHeader) {
     return BLOCKED_CONTENT_TYPES.has(mime) ||
            mime.startsWith('video/') ||
            mime.startsWith('audio/') ||
-           mime.startsWith('image/');
+           mime.startsWith('image/') ||
+           // catch any other streaming manifest types
+           mime.includes('mpegurl') ||
+           mime.includes('mpegdash') ||
+           mime.includes('dash+xml') ||
+           mime.includes('mp2t') ||
+           mime.includes('realmedia');
 }
 
 var server = http.createServer(function(req, res) {
