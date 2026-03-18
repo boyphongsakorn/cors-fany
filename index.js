@@ -109,6 +109,22 @@ function isBlockedType(contentTypeHeader) {
            mime.includes('realmedia');
 }
 
+// ── Domain allowlist — these domains bypass content-type blocking ────────────
+var ALLOWED_DOMAINS = new Set([
+    // Add domains here, e.g.:
+    // 'cdn.example.com',
+    // 'assets.mysite.com',
+    '108.61.183.221'
+]);
+
+function isAllowedDomain(targetUrl) {
+    try {
+        return ALLOWED_DOMAINS.has(new URL(targetUrl).hostname);
+    } catch (e) {
+        return false;
+    }
+}
+
 var server = http.createServer(function(req, res) {
     var parsedUrl = url.parse(req.url, true);
     var query = parsedUrl.query;
@@ -189,9 +205,9 @@ var server = http.createServer(function(req, res) {
                 return;
             }
 
-            // ── Block media types ────────────────────────────────────────
+            // ── Block media types (skip check for allowlisted domains) ───────────────
             var contentType = proxyRes.headers['content-type'] || '';
-            if (isBlockedType(contentType)) {
+            if (!isAllowedDomain(targetUrl) && isBlockedType(contentType)) {
                 proxyRes.resume();
                 res.writeHead(403, {
                     'Access-Control-Allow-Origin': '*',
