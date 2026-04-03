@@ -126,6 +126,19 @@ function isAllowedDomain(targetUrl) {
 }
 
 var server = http.createServer(function(req, res) {
+
+    // ── Handle CORS preflight ────────────────────────────────────────────────
+    if (req.method === 'OPTIONS') {
+        res.writeHead(200, {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, PATCH, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With, api-token',
+            'Access-Control-Max-Age': '86400'
+        });
+        res.end();
+        return;
+    }
+
     var parsedUrl = url.parse(req.url, true);
     var query = parsedUrl.query;
 
