@@ -198,8 +198,8 @@ var server = http.createServer(function(req, res) {
             port: targetParsed.port || (useHttps ? 443 : 80),
             path: targetParsed.pathname + (targetParsed.search || ''),
             method: req.method,
-            headers: buildHeaders(req.headers),
-            timeout: 8000  // 8 seconds — just under the 10s Lambda limit
+            headers: buildHeaders(req.headers)//,
+            // timeout: 8000  // 8 seconds — just under the 10s Lambda limit
         };
 
         var proxyReq = protocol.request(options, function(proxyRes) {
