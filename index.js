@@ -186,7 +186,8 @@ var server = http.createServer(function(req, res) {
             port: targetParsed.port || (useHttps ? 443 : 80),
             path: targetParsed.pathname + (targetParsed.search || ''),
             method: req.method,
-            headers: buildHeaders(req.headers)
+            headers: buildHeaders(req.headers),
+            timeout: 8000  // 8 seconds — just under the 10s Lambda limit
         };
 
         var proxyReq = protocol.request(options, function(proxyRes) {
@@ -246,6 +247,14 @@ var server = http.createServer(function(req, res) {
                 res.writeHead(500, { 'Access-Control-Allow-Origin': '*' });
             }
             res.end('Proxy error: ' + err.message);
+        });
+
+        proxyReq.on('timeout', function() {
+            proxyReq.destroy();
+            if (!res.headersSent) {
+                res.writeHead(504, { 'Access-Control-Allow-Origin': '*' });
+            }
+            res.end('Proxy timeout: target server took too long to respond');
         });
 
         if (req.method !== 'GET' && req.method !== 'HEAD') {
