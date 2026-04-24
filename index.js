@@ -142,23 +142,23 @@ var server = http.createServer(function(req, res) {
     var parsedUrl = url.parse(req.url, true);
     var query = parsedUrl.query;
 
-    console.log(req.url);
-    // Handle ?url= query parameter
+    console.log('Original req.url:', req.url);
+
     var parsedForUrl = url.parse(req.url, true);
     if (parsedForUrl.query && parsedForUrl.query.url) {
         req.url = '/' + parsedForUrl.query.url;
+        console.log('After ?url= rewrite:', req.url);
     }
     
-    // Fix double-slash normalization (Vercel strips https:// to https:/)
     if (!/^\/https?:\/\//.test(req.url)) {
         req.url = req.url.replace(/^\/(https?:\/)([^/])/, '/$1/$2');
+        console.log('After slash fix:', req.url);
     }
     
-    // Final fallback: still no protocol, prepend https://
     if (!/^\/https?:\/\//.test(req.url)) {
         req.url = '/https://' + req.url.slice(1);
+        console.log('After fallback:', req.url);
     }
-    console.log(req.url);
 
     var shouldCache = 'cache' in query;
 
