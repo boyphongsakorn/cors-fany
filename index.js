@@ -153,9 +153,9 @@ var server = http.createServer(function(req, res) {
     // ── Helper: build filtered headers ──────────────────────────────────────
     function buildHeaders(reqHeaders) {
         var h = Object.assign({}, reqHeaders);
-        ['host', 'cookie', 'cookie2', 'authorization', 'proxy-authorization'].forEach(function(k) {
-            delete h[k];
-        });
+        // ['host', 'cookie', 'cookie2', 'authorization', 'proxy-authorization'].forEach(function(k) {
+        //     delete h[k];
+        // });
         return h;
     }
 
