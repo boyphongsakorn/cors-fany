@@ -143,6 +143,18 @@ var server = http.createServer(function(req, res) {
     var query = parsedUrl.query;
 
     console.log(req.url);
+    // Handle ?url= query parameter
+    var parsedForUrl = url.parse(req.url, true);
+    if (parsedForUrl.query && parsedForUrl.query.url) {
+        req.url = '/' + parsedForUrl.query.url;
+    }
+    
+    // Fix double-slash normalization (Vercel strips https:// to https:/)
+    if (!/^\/https?:\/\//.test(req.url)) {
+        req.url = req.url.replace(/^\/(https?:\/)([^/])/, '/$1/$2');
+    }
+    
+    // Final fallback: still no protocol, prepend https://
     if (!/^\/https?:\/\//.test(req.url)) {
         req.url = '/https://' + req.url.slice(1);
     }
