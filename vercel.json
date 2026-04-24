@@ -10,5 +10,11 @@
         "src": "/(.*)",
         "dest": "index.js"
       }
+  ],
+  "rewrites": [
+    {
+      "source": "/:path*",
+      "destination": "/:path*"
+    }
   ]
 }
