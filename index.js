@@ -168,6 +168,9 @@ var server = http.createServer(function(req, res) {
         // ['host', 'cookie', 'cookie2', 'authorization', 'proxy-authorization'].forEach(function(k) {
         //     delete h[k];
         // });
+        ['host', 'cookie', 'cookie2'].forEach(function(k) {
+            delete h[k];
+        });
         return h;
     }
 
