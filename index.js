@@ -265,13 +265,13 @@ var server = http.createServer(function(req, res) {
             res.end('Proxy error: ' + err.message);
         });
 
-        proxyReq.on('timeout', function() {
-            proxyReq.destroy();
-            if (!res.headersSent) {
-                res.writeHead(504, { 'Access-Control-Allow-Origin': '*' });
-            }
-            res.end('Proxy timeout: target server took too long to respond');
-        });
+        // proxyReq.on('timeout', function() {
+        //     proxyReq.destroy();
+        //     if (!res.headersSent) {
+        //         res.writeHead(504, { 'Access-Control-Allow-Origin': '*' });
+        //     }
+        //     res.end('Proxy timeout: target server took too long to respond');
+        // });
 
         if (req.method !== 'GET' && req.method !== 'HEAD') {
             req.pipe(proxyReq);
